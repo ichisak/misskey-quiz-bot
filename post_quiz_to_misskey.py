@@ -1,15 +1,18 @@
 import requests
 import random
+import json
 from dotenv import load_dotenv
 import os
 import logging
 import google.cloud.logging
+from google.oauth2.service_account import Credentials
 from datetime import datetime
 import gspread
+from flask import Flask
+app = Flask(__name__)
 
 #環境変数読み込み
 load_dotenv()
-
 
 #自分のMisskeyインスタンスのURL
 MISSKEY_INSTANCE = os.getenv("MISSKEY_URL")
@@ -17,7 +20,7 @@ MISSKEY_INSTANCE = os.getenv("MISSKEY_URL")
 API_TOKEN = os.getenv("API_TOKEN") 
 
 #Google Sheets設定
-SERVICE_ACCOUNT = os.getenv("SERVICE_ACCOUNT")  
+#SERVICE_ACCOUNT = os.getenv("SERVICE_ACCOUNT")  
 FILE_NAME = os.getenv("FILE_NAME")     
 
 #Cloud Loggingの初期化
@@ -32,9 +35,21 @@ exectuion_date = datetime.today().strftime("%Y-%m-%d")
 def log_message(message):
     logging.info(f"{datetime.now()} - {message}")
 
+#GoogleCloud用SecretManager
+def get_gspread_client():
+    sa_json_str = os.getenv("SERVICE_ACCOUNT_JSON")
+    sa_info = json.loads(sa_json_str)
+    creds = Credentials.from_service_account_info(sa_info, scopes=["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"])
+    gc = gspread.Client(auth=creds)
+    return gc
+
+
 #ランダムにクイズを取得する
 def get_random_quiz():
-    gc = gspread.service_account(filename=SERVICE_ACCOUNT)
+    #ローカル実行時
+    #gc = gspread.service_account(filename=SERVICE_ACCOUNT)
+    #CloudRun用
+    gc = get_gspread_client()
     sh = gc.open(FILE_NAME)
     worksheet = sh.worksheet("クイズ")
     rows = worksheet.get_all_values()
@@ -78,6 +93,21 @@ def post_to_misskey(question,answer):
         return False
 
 
-if __name__ == "__main__":
+#CloudRun実行時
+@app.route("/", methods=["GET"])
+def main():
     question, answer = get_random_quiz()
-    post_to_misskey(question, answer)
+    success = post_to_misskey(question, answer)
+    if success:
+        return "Posted successfully\n", 200
+    else:
+        return "Posting failed\n", 500
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=8080)
+
+
+#ローカル実行時
+#if __name__ == "__main__":
+#    question, answer = get_random_quiz()
+#    post_to_misskey(question, answer)
